@@ -1,0 +1,267 @@
+@page "/chat"
+@using System.Net.WebSockets
+@using System.Text
+@using System.Text.Json
+@using HorizonChat.Services
+@inject NavigationManager NavigationManager
+@inject UserStateService UserState
+@implements IAsyncDisposable
+
+<PageTitle>Chat Room - HorizonChat</PageTitle>
+
+<div class="chat-container">
+    <div class="chat-header">
+        <h2>🎯 HorizonChat</h2>
+        <div class="user-info">
+            <span class="username-badge">@UserState.Username</span>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="LeaveChat">Leave</button>
+        </div>
+    </div>
+
+    <div class="messages-container" @ref="messagesContainer">
+        @if (messages.Count == 0)
+        {
+            <div class="no-messages">
+                <p>No messages yet. Start the conversation! 💬</p>
+            </div>
+        }
+        else
+        {
+            @foreach (var message in messages)
+            {
+                <div class="message @(message.Username == UserState.Username ? "message-own" : "message-other")">
+                    <div class="message-header">
+                        <span class="message-username">@message.Username</span>
+                        <span class="message-timestamp">@message.Timestamp.ToString("HH:mm")</span>
+                    </div>
+                    <div class="message-content">
+                        @message.Text
+                    </div>
+                </div>
+            }
+        }
+    </div>
+
+    <div class="message-input-container">
+        @if (!string.IsNullOrWhiteSpace(errorMessage))
+        {
+            <div class="alert alert-danger alert-sm">@errorMessage</div>
+        }
+        <div class="input-group">
+            <input 
+                type="text" 
+                class="form-control message-input" 
+                placeholder="Type your message..."
+                @bind="currentMessage"
+                @bind:event="oninput"
+                @onkeypress="HandleKeyPress"
+                disabled="@(!isConnected)" />
+            <button 
+                class="btn btn-primary send-button" 
+                @onclick="SendMessage"
+                disabled="@(!CanSendMessage)">
+                <span class="oi oi-share"></span> Send
+            </button>
+        </div>
+        <div class="connection-status">
+            @if (isConnected)
+            {
+                <span class="status-connected">● Connected</span>
+            }
+            else
+            {
+                <span class="status-disconnected">● Disconnected</span>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private ClientWebSocket? webSocket;
+    private CancellationTokenSource? cancellationTokenSource;
+    private List<ChatMessage> messages = new();
+    private string currentMessage = string.Empty;
+    private string errorMessage = string.Empty;
+    private bool isConnected = false;
+    private ElementReference messagesContainer;
+
+    private bool CanSendMessage => 
+        isConnected && 
+        !string.IsNullOrWhiteSpace(currentMessage) && 
+        currentMessage.Trim().Length > 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Check if user has selected a username
+        if (!UserState.IsUserAuthenticated)
+        {
+            NavigationManager.NavigateTo("/");
+            return;
+        }
+
+        await ConnectToWebSocket();
+    }
+
+    private async Task ConnectToWebSocket()
+    {
+        try
+        {
+            webSocket = new ClientWebSocket();
+            cancellationTokenSource = new CancellationTokenSource();
+
+            var uri = new Uri($"{NavigationManager.BaseUri.Replace("http", "ws")}ws");
+            await webSocket.ConnectAsync(uri, cancellationTokenSource.Token);
+            
+            isConnected = true;
+            errorMessage = string.Empty;
+            StateHasChanged();
+
+            // Start listening for messages
+            _ = Task.Run(() => ReceiveMessages(cancellationTokenSource.Token));
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Connection failed: {ex.Message}";
+            isConnected = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ReceiveMessages(CancellationToken cancellationToken)
+    {
+        var buffer = new byte[1024 * 4];
+        
+        try
+        {
+            while (webSocket?.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
+            {
+                var result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
+                
+                if (result.MessageType == WebSocketMessageType.Text)
+                {
+                    var messageJson = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                    
+                    try
+                    {
+                        var message = JsonSerializer.Deserialize<ChatMessage>(messageJson, new JsonSerializerOptions
+                        {
+                            PropertyNameCaseInsensitive = true
+                        });
+
+                        if (message != null)
+                        {
+                            await InvokeAsync(() =>
+                            {
+                                messages.Add(message);
+                                StateHasChanged();
+                                ScrollToBottom();
+                            });
+                        }
+                    }
+                    catch
+                    {
+                        // If deserialization fails, treat as plain text echo
+                        var echoMessage = new ChatMessage
+                        {
+                            Username = "System",
+                            Text = messageJson,
+                            Timestamp = DateTime.Now
+                        };
+                        
+                        await InvokeAsync(() =>
+                        {
+                            messages.Add(echoMessage);
+                            StateHasChanged();
+                            ScrollToBottom();
+                        });
+                    }
+                }
+                else if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                    isConnected = false;
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                errorMessage = $"Connection lost: {ex.Message}";
+                isConnected = false;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private async Task SendMessage()
+    {
+        if (!CanSendMessage || webSocket?.State != WebSocketState.Open)
+            return;
+
+        try
+        {
+            var message = new ChatMessage
+            {
+                Username = UserState.Username,
+                Text = currentMessage.Trim(),
+                Timestamp = DateTime.Now
+            };
+
+            var messageJson = JsonSerializer.Serialize(message);
+            var messageBytes = Encoding.UTF8.GetBytes(messageJson);
+
+            await webSocket.SendAsync(
+                new ArraySegment<byte>(messageBytes),
+                WebSocketMessageType.Text,
+                true,
+                CancellationToken.None);
+
+            currentMessage = string.Empty;
+            errorMessage = string.Empty;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Failed to send message: {ex.Message}";
+        }
+    }
+
+    private void HandleKeyPress(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && CanSendMessage)
+        {
+            _ = SendMessage();
+        }
+    }
+
+    private void LeaveChat()
+    {
+        NavigationManager.NavigateTo("/");
+    }
+
+    private void ScrollToBottom()
+    {
+        // Scroll will be handled by CSS and browser behavior
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        cancellationTokenSource?.Cancel();
+        
+        if (webSocket?.State == WebSocketState.Open)
+        {
+            await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Leaving chat", CancellationToken.None);
+        }
+        
+        webSocket?.Dispose();
+        cancellationTokenSource?.Dispose();
+    }
+
+    private class ChatMessage
+    {
+        public string Username { get; set; } = string.Empty;
+        public string Text { get; set; } = string.Empty;
+        public DateTime Timestamp { get; set; }
+    }
+}
