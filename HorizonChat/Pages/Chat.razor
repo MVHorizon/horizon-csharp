@@ -3,8 +3,10 @@
 @using System.Text
 @using System.Text.Json
 @using HorizonChat.Services
+@using Microsoft.JSInterop
 @inject NavigationManager NavigationManager
 @inject UserStateService UserState
+@inject IJSRuntime JSRuntime
 @implements IAsyncDisposable
 
 <PageTitle>Chat Room - HorizonChat</PageTitle>
@@ -18,7 +20,7 @@
         </div>
     </div>
 
-    <div class="messages-container" @ref="messagesContainer">
+    <div class="messages-container" @ref="messagesContainer" id="messagesContainer">
         @if (messages.Count == 0)
         {
             <div class="no-messages">
@@ -52,6 +54,7 @@
                 type="text" 
                 class="form-control message-input" 
                 placeholder="Type your message..."
+                maxlength="1000"
                 @bind="currentMessage"
                 @bind:event="oninput"
                 @onkeypress="HandleKeyPress"
@@ -202,10 +205,18 @@
 
         try
         {
+            // Validate message length
+            var trimmedMessage = currentMessage.Trim();
+            if (trimmedMessage.Length > 1000)
+            {
+                errorMessage = "Message is too long. Maximum 1000 characters allowed.";
+                return;
+            }
+
             var message = new ChatMessage
             {
                 Username = UserState.Username,
-                Text = currentMessage.Trim(),
+                Text = trimmedMessage,
                 Timestamp = DateTime.Now
             };
 
@@ -240,9 +251,16 @@
         NavigationManager.NavigateTo("/");
     }
 
-    private void ScrollToBottom()
+    private async void ScrollToBottom()
     {
-        // Scroll will be handled by CSS and browser behavior
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("scrollToBottom", "messagesContainer");
+        }
+        catch
+        {
+            // JS interop may fail during initial render or disposal
+        }
     }
 
     public async ValueTask DisposeAsync()
