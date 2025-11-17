@@ -173,5 +173,133 @@ namespace HorizonChat.Tests.Services
             Assert.True(subscriber1Called);
             Assert.True(subscriber2Called);
         }
+
+        [Fact]
+        public void Status_ShouldBeAvailable_WhenServiceIsInitialized()
+        {
+            // Arrange & Act
+            var service = new UserStateService();
+
+            // Assert
+            Assert.Equal("Available", service.Status);
+        }
+
+        [Fact]
+        public void SetStatus_ShouldUpdateStatus_WhenValidStatusProvided()
+        {
+            // Arrange
+            var service = new UserStateService();
+            var expectedStatus = "Busy";
+
+            // Act
+            service.SetStatus(expectedStatus);
+
+            // Assert
+            Assert.Equal(expectedStatus, service.Status);
+        }
+
+        [Fact]
+        public void SetStatus_ShouldThrowArgumentException_WhenStatusIsEmpty()
+        {
+            // Arrange
+            var service = new UserStateService();
+
+            // Act & Assert
+            Assert.Throws<ArgumentException>(() => service.SetStatus(""));
+        }
+
+        [Fact]
+        public void SetStatus_ShouldThrowArgumentException_WhenStatusIsWhitespace()
+        {
+            // Arrange
+            var service = new UserStateService();
+
+            // Act & Assert
+            Assert.Throws<ArgumentException>(() => service.SetStatus("   "));
+        }
+
+        [Fact]
+        public void SetStatus_ShouldThrowArgumentException_WhenStatusExceeds30Characters()
+        {
+            // Arrange
+            var service = new UserStateService();
+            var longStatus = new string('A', 31);
+
+            // Act & Assert
+            Assert.Throws<ArgumentException>(() => service.SetStatus(longStatus));
+        }
+
+        [Fact]
+        public void SetStatus_ShouldAcceptCustomStatus_WithinCharacterLimit()
+        {
+            // Arrange
+            var service = new UserStateService();
+            var customStatus = "Working from home";
+
+            // Act
+            service.SetStatus(customStatus);
+
+            // Assert
+            Assert.Equal(customStatus, service.Status);
+        }
+
+        [Fact]
+        public void SetStatus_ShouldTriggerOnChangeEvent()
+        {
+            // Arrange
+            var service = new UserStateService();
+            var eventTriggered = false;
+            service.OnChange += () => eventTriggered = true;
+
+            // Act
+            service.SetStatus("Away");
+
+            // Assert
+            Assert.True(eventTriggered);
+        }
+
+        [Fact]
+        public void ClearUsername_ShouldResetStatusToAvailable()
+        {
+            // Arrange
+            var service = new UserStateService();
+            service.SetUsername("TestUser");
+            service.SetStatus("Busy");
+
+            // Act
+            service.ClearUsername();
+
+            // Assert
+            Assert.Equal("Available", service.Status);
+        }
+
+        [Fact]
+        public void AvailableStatuses_ShouldContainPredefinedStatuses()
+        {
+            // Arrange
+            var service = new UserStateService();
+
+            // Act
+            var statuses = service.AvailableStatuses.ToList();
+
+            // Assert
+            Assert.Contains("Available", statuses);
+            Assert.Contains("Busy", statuses);
+            Assert.Contains("Away", statuses);
+            Assert.Contains("Do Not Disturb", statuses);
+        }
+
+        [Fact]
+        public void SetStatus_ShouldAcceptPredefinedStatus()
+        {
+            // Arrange
+            var service = new UserStateService();
+
+            // Act
+            service.SetStatus("Do Not Disturb");
+
+            // Assert
+            Assert.Equal("Do Not Disturb", service.Status);
+        }
     }
 }

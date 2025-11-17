@@ -15,7 +15,30 @@
     <div class="chat-header">
         <h2>🎯 HorizonChat</h2>
         <div class="user-info">
-            <span class="username-badge">@UserState.Username</span>
+            <div class="user-details">
+                <span class="username-badge">@UserState.Username</span>
+                <div class="status-selector">
+                    <select class="form-select form-select-sm status-dropdown" value="@selectedStatus" @onchange="OnStatusChange">
+                        @foreach (var status in UserState.AvailableStatuses)
+                        {
+                            <option value="@status">@status</option>
+                        }
+                        <option value="custom">Custom...</option>
+                    </select>
+                    @if (selectedStatus == "custom")
+                    {
+                        <input 
+                            type="text" 
+                            class="form-control form-control-sm custom-status-input"
+                            placeholder="Enter custom status (max 30 chars)"
+                            maxlength="30"
+                            @bind="customStatus"
+                            @bind:event="oninput"
+                            @onblur="ApplyCustomStatus" />
+                    }
+                </div>
+                <span class="status-badge">@UserState.Status</span>
+            </div>
             <button class="btn btn-sm btn-outline-secondary" @onclick="LeaveChat">Leave</button>
         </div>
     </div>
@@ -33,7 +56,13 @@
             {
                 <div class="message @(message.Username == UserState.Username ? "message-own" : "message-other")">
                     <div class="message-header">
-                        <span class="message-username">@message.Username</span>
+                        <span class="message-username">
+                            @message.Username
+                            @if (!string.IsNullOrEmpty(message.Status))
+                            {
+                                <span class="message-status">(@message.Status)</span>
+                            }
+                        </span>
                         <span class="message-timestamp">@message.Timestamp.ToString("HH:mm")</span>
                     </div>
                     <div class="message-content">
@@ -87,6 +116,8 @@
     private string errorMessage = string.Empty;
     private bool isConnected = false;
     private ElementReference messagesContainer;
+    private string selectedStatus = "Available";
+    private string customStatus = string.Empty;
 
     private bool CanSendMessage => 
         isConnected && 
@@ -102,7 +133,82 @@
             return;
         }
 
+        selectedStatus = UserState.Status;
         await ConnectToWebSocket();
+    }
+
+    private async Task OnStatusChange(ChangeEventArgs e)
+    {
+        var newStatus = e.Value?.ToString() ?? "Available";
+        if (newStatus != "custom")
+        {
+            selectedStatus = newStatus;
+            await UpdateStatus();
+        }
+        else
+        {
+            selectedStatus = "custom";
+        }
+    }
+
+    private async Task UpdateStatus()
+    {
+        if (selectedStatus != "custom")
+        {
+            UserState.SetStatus(selectedStatus);
+            await BroadcastStatusUpdate();
+        }
+    }
+
+    private async Task ApplyCustomStatus()
+    {
+        if (!string.IsNullOrWhiteSpace(customStatus))
+        {
+            try
+            {
+                UserState.SetStatus(customStatus.Trim());
+                selectedStatus = customStatus.Trim();
+                await BroadcastStatusUpdate();
+            }
+            catch (ArgumentException ex)
+            {
+                errorMessage = ex.Message;
+            }
+            catch (Exception ex)
+            {
+                errorMessage = $"Failed to set status: {ex.Message}";
+            }
+        }
+    }
+
+    private async Task BroadcastStatusUpdate()
+    {
+        if (webSocket?.State != WebSocketState.Open)
+            return;
+
+        try
+        {
+            var statusUpdate = new
+            {
+                Type = "status",
+                Username = UserState.Username,
+                Status = UserState.Status,
+                Timestamp = DateTime.Now
+            };
+
+            var messageJson = JsonSerializer.Serialize(statusUpdate);
+            var messageBytes = Encoding.UTF8.GetBytes(messageJson);
+
+            await webSocket.SendAsync(
+                new ArraySegment<byte>(messageBytes),
+                WebSocketMessageType.Text,
+                true,
+                CancellationToken.None);
+        }
+        catch
+        {
+            // Ignore errors in status broadcast
+        }
     }
 
     private async Task ConnectToWebSocket()
@@ -217,6 +323,7 @@
             {
                 Username = UserState.Username,
                 Text = trimmedMessage,
+                Status = UserState.Status,
                 Timestamp = DateTime.Now
             };
 
@@ -280,6 +387,7 @@
     {
         public string Username { get; set; } = string.Empty;
         public string Text { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
         public DateTime Timestamp { get; set; }
     }
 }
